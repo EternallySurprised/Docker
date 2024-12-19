@@ -1,0 +1,200 @@
+networks:
+  mediastack:
+    name: mediastack
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+      - subnet: ${DOCKER_SUBNET:?err}
+        gateway: ${DOCKER_GATEWAY:?err}
+
+##  Docker Compose File: Gluetun (qmcgaw)
+##  Function: VPN Client
+##  Documentation: https://github.com/qdm12/gluetun-wiki
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8888:8888/tcp"                                                     # Gluetun Local Network HTTP proxy
+      - "8388:8388/tcp"                                                     # Gluetun Local Network Shadowsocks
+      - "8388:8388/udp"                                                     # Gluetun Local Network Shadowsocks
+      - "${WEBUI_PORT_QBITTORRENT:?err}:${WEBUI_PORT_QBITTORRENT:?err}"     # WebUI Portal: qBittorrent
+      - "${QBIT_PORT:?err}:6881"                                            # Default Transmission Torrent Port
+    volumes:
+      - ${FOLDER_FOR_DATA:?err}/gluetun:/gluetun
+      - ${FOLDER_FOR_PORTFORWARD:?err}:/tmp/gluetun
+    environment:
+      - PUID=${PUID:?err}
+      - PGID=${PGID:?err}
+      - UMASK=${UMASK:?err}
+      - TZ=${TIMEZONE:?err}
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER:?err}
+      - SERVER_COUNTRIES=${SERVER_COUNTRIES}
+      - VPN_PORT_FORWARDING=on  # on if needed, e.g. Torrent, otherwise off
+      - FIREWALL_OUTBOUND_SUBNETS=${LOCAL_SUBNET:?err}
+      - VPN_TYPE=${VPN_TYPE}
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - HTTPPROXY=on
+      - SHADOWSOCKS=on
+    # Gluetun VPN container MUST ONLY connect to the mediastack
+    networks:
+      - mediastack
+ 
+##  Docker Compose File: qBittorrent (LinuxServer.io)
+##  Function: Torrent Download Client
+##  Documentation: https://docs.linuxserver.io/images/docker-qbittorrent
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    restart: unless-stopped
+    healthcheck:
+      test: "curl -f http://localhost:$WEBUI_PORT_QBITTORRENT"  # Healthy once WebUI is up (so we can update the forwarded port)
+      interval: 30s
+      timeout: 30s
+      retries: 20
+    volumes:
+      - ${FOLDER_FOR_DATA:?err}/qbittorrent:/config
+      - ${FOLDER_FOR_MEDIA:?err}/downloads:/data/downloads
+    environment:
+      - PUID=${PUID:?err}
+      - PGID=${PGID:?err}
+      - UMASK=${UMASK:?err}
+      - TZ=${TIMEZONE:?err}
+      - WEBUI_PORT=${WEBUI_PORT_QBITTORRENT:?err}
+      - DOCKER_MODS=ghcr.io/themepark-dev/theme.park:qbittorrent
+      - TP_THEME=${TP_THEME:?err}
+    network_mode: "container:gluetun"
+
+##  Docker Compose File: qBittorrent Port Manager (snoringdragon)
+##  Function: Automatically assign forwarded VPN port to qBittorrent
+##  Documentation: https://github.com/SnoringDragon/gluetun-qbittorrent-port-manager
+  gluetun-qbittorrent-port-manager:
+    image: snoringdragon/gluetun-qbittorrent-port-manager:latest
+    restart: unless-stopped
+    depends_on:
+      qbittorrent:
+        condition: service_healthy  # Start this after qbittorrent to make sure the forwarded port can be updated using the API
+    volumes:
+      - ${FOLDER_FOR_PORTFORWARD:?err}:/tmp/gluetun
+    network_mode: "container:gluetun"
+    environment:
+      QBITTORRENT_SERVER: localhost
+      QBITTORRENT_PORT: ${WEBUI_PORT_QBITTORRENT:?err}
+      QBITTORRENT_USER: ${WEBUI_USER_QBITTORRENT:?err}
+      QBITTORRENT_PASS: ${WEBUI_PWD_QBITTORRENT:?err}
+      PORT_FORWARDED: /tmp/gluetun/forwarded_port
+      HTTP_S: http # Select 'http' or 'https'
+
+##  Docker Compose File: Jellyfin (LinuxServer.io)
+##  Function: Media Server
+##  Documentation: https://jellyfin.org/docs/general/administration/installing#docker
+##  Enable HW-Acceleration: https://jellyfin.org/docs/general/administration/hardware-acceleration/
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    volumes:
+      - ${FOLDER_FOR_DATA:?err}/jellyfin:/config
+      - ${FOLDER_FOR_MEDIA:?err}/media/movies:/data/movies
+      - ${FOLDER_FOR_MEDIA:?err}/media/music:/data/music
+      - ${FOLDER_FOR_MEDIA:?err}/media/tv:/data/shows
+    ports:
+      - "${WEBUI_PORT_JELLYFIN:?err}:8096"
+      - 7359:7359/udp
+      - 1900:1900/udp
+    environment:
+      - PUID=${PUID:?err}
+      - PGID=${PGID:?err}
+      - UMASK=${UMASK:?err}
+      - TZ=${TIMEZONE:?err}
+    networks:
+      - mediastack
+
+##  Docker Compose File: Radarr (LinuxServer.io)
+##  Function: Movie Library Manager
+##  Documentation: https://docs.linuxserver.io/images/docker-radarr
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    restart: unless-stopped
+    volumes:
+      - ${FOLDER_FOR_RADARR_CONFIG:?err}:/config
+      - ${FOLDER_FOR_MEDIA:?err}:/data
+    ports:
+      - "${WEBUI_PORT_RADARR:?err}:7878"
+    environment:
+      - PUID=${PUID:?err}
+      - PGID=${PGID:?err}
+      - TZ=${TIMEZONE:?err}
+      - DOCKER_MODS=ghcr.io/themepark-dev/theme.park:radarr
+      - TP_THEME=${TP_THEME:?err}
+    networks:
+      - mediastack
+
+##  Docker Compose File: Sonarr (LinuxServer.io)
+##  Function: Series Library Manager (TV Shows)
+##  Documentation: https://docs.linuxserver.io/images/docker-sonarr
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    restart: unless-stopped
+    volumes:
+      - ${FOLDER_FOR_SONARR_CONFIG:?err}:/config
+      - ${FOLDER_FOR_MEDIA:?err}:/data
+    ports:
+      - "${WEBUI_PORT_SONARR:?err}:8989"
+    environment:
+      - PUID=${PUID:?err}
+      - PGID=${PGID:?err}
+      - TZ=${TIMEZONE:?err}
+      - DOCKER_MODS=ghcr.io/themepark-dev/theme.park:sonarr
+      - TP_THEME=${TP_THEME:?err}
+    networks:
+      - mediastack
+
+##  Docker Compose File: Bazarr (LinuxServer.io)
+##  Function: Download subtitles for Radarr and Sonarr
+##  Documentation: https://docs.linuxserver.io/images/docker-bazarr
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    restart: unless-stopped
+    volumes:
+      - ${FOLDER_FOR_BAZARR_CONFIG:?err}:/config
+      - ${FOLDER_FOR_MEDIA:?err}:/data
+    ports:
+      - "${WEBUI_PORT_BAZARR:?err}:6767"
+    environment:
+      - PUID=${PUID:?err}
+      - PGID=${PGID:?err}
+      - TZ=${TIMEZONE:?err}
+      - DOCKER_MODS=ghcr.io/themepark-dev/theme.park:bazarr
+      - TP_THEME=${TP_THEME:?err}
+    networks:
+      - mediastack
+
+##  Docker Compose File: Prowlarr (LinuxServer.io)
+##  Function: Indexer and Search Manager
+##  Documentation: https://docs.linuxserver.io/images/docker-prowlarr
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    restart: unless-stopped
+    volumes:
+      - ${FOLDER_FOR_PROWLARR_CONFIG:?err}:/config
+    ports:
+      - "${WEBUI_PORT_PROWLARR:?err}:9696"
+    environment:
+      - PUID=${PUID:?err}
+      - PGID=${PGID:?err}
+      - TZ=${TIMEZONE:?err}
+      - DOCKER_MODS=ghcr.io/themepark-dev/theme.park:prowlarr
+      - TP_THEME=${TP_THEME:?err}
+    networks:
+      - mediastack

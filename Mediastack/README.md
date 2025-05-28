@@ -44,7 +44,7 @@ My setup assumes that the data directory **`FOLDER_FOR_MEDIA`** has the followin
 If you want to make sure that you actually share torrents, it is required to have port forwarding to qBittorrent. That also means your VPN provider needs to support this, which is why I use ProtonVPN. 
 Unfortunately, this gives you a different port whenever the connection is established which you would need to update manually then.
 
-Luckily, there is the [Gluetun qBittorrent Port Manager](https://github.com/SnoringDragon/gluetun-qbittorrent-port-manager) which automates this for you. It requires an exchange directory that can actually reside whereever you want.
+Luckily, there is the [qBittorrent Gluetun port update]([https://github.com/SnoringDragon/gluetun-qbittorrent-port-manager](https://github.com/joshua-klassen/qbittorrent-gluetun-port-update)) which automates this for you. It will do this via the qBittorrent WebUI, so the credentials for that are provided to it.
 
 I set the stack up in a way that this service waits for qBittorrent to be up and running before updating the port. This way, it will always work properly in my experience.
 
